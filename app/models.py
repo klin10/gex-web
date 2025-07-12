@@ -9,7 +9,7 @@ class Ticker(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     symbol = db.Column(db.String(10), unique=True, nullable=False)
     company_name = db.Column(db.String(100))
-    last_updated_info = db.Column(db.DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    last_updated_info = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     expirations = relationship("Expiration", back_populates="ticker", cascade="all, delete-orphan")
 
@@ -20,7 +20,7 @@ class Expiration(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     ticker_id = db.Column(db.Integer, db.ForeignKey('ticker.id'), nullable=False)
     date = db.Column(db.Date, nullable=False)
-    last_fetched_gex = db.Column(db.DateTime)
+    last_fetched_gex = db.Column(db.DateTime) # Will be set by ingestor as naive UTC
 
     ticker = relationship("Ticker", back_populates="expirations")
     strikes = relationship("GEXStrikeData", back_populates="expiration", cascade="all, delete-orphan")
@@ -41,7 +41,7 @@ class GEXStrikeData(db.Model):
 
     # Snapshot of context for this calculation
     spot_price_at_calculation = db.Column(db.Float)
-    calculation_timestamp = db.Column(db.DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    calculation_timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     expiration = relationship("Expiration", back_populates="strikes")
 
