@@ -1,8 +1,10 @@
 import datetime
 import os
 from flask import Flask, render_template, request, jsonify
+import yfinance as yf
+import pandas as pd
 from .models import db, Ticker, Expiration, GEXStrikeData
-from .gex_calculator import GEXCalculator # Needed for default risk rate
+from .gex_calculator import GEXCalculator
 
 app = Flask(__name__)
 
@@ -135,10 +137,8 @@ def get_gex_data_from_db():
     # Take the spot price from the latest selected expiration date for display
     spot_price_at_calc = expirations_to_query_orm[-1].strikes[0].spot_price_at_calculation if expirations_to_query_orm and expirations_to_query_orm[-1].strikes else None
 
-    # Only return zero_gamma_level if exactly one expiration is selected
-    zero_gamma_level_val = None
-    if len(expirations_to_query_orm) == 1:
-        zero_gamma_level_val = expirations_to_query_orm[0].zero_gamma_level
+    # The zero_gamma_level is now calculated by a separate endpoint.
+    # We remove it from this response.
 
     return jsonify({
         "ticker": company_name,
@@ -146,7 +146,6 @@ def get_gex_data_from_db():
         "selected_expiration_date": selected_exp_dates_to_display,
         "spot_price_used": round(spot_price_at_calc, 2) if spot_price_at_calc else None,
         "risk_free_rate_used": GEXCalculator().risk_free_rate,
-        "zero_gamma_level": zero_gamma_level_val,
         "gex_by_strike": strike_data_list_resp,
         "total_net_gex_usd": round(total_net_gex, 2),
         "total_call_gex_usd": round(total_call_gex, 2),
@@ -166,6 +165,61 @@ def init_db_command():
     with app.app_context():
         db.create_all()
     print('Initialized the database.')
+
+@app.route('/calculate_zero_gamma', methods=['GET'])
+def calculate_zero_gamma_endpoint():
+    ticker_symbol = request.args.get('ticker')
+    exp_dates = request.args.getlist('expiration')
+
+    if not ticker_symbol or not exp_dates:
+        return jsonify({"error": "Ticker and at least one expiration date are required."}), 400
+
+    try:
+        yf_ticker = yf.Ticker(ticker_symbol)
+
+        # Fetch fresh data from yfinance for the calculation
+        all_calls = []
+        all_puts = []
+        for date_str in exp_dates:
+            chain = yf_ticker.option_chain(date_str)
+            if not chain.calls.empty:
+                chain.calls['expirationDate'] = date_str # Add expiration date column
+                all_calls.append(chain.calls)
+            if not chain.puts.empty:
+                chain.puts['expirationDate'] = date_str # Add expiration date column
+                all_puts.append(chain.puts)
+
+        if not all_calls and not all_puts:
+            return jsonify({"error": "Could not fetch any option data for the selected dates."}), 404
+
+        calls_df = pd.concat(all_calls, ignore_index=True) if all_calls else pd.DataFrame()
+        puts_df = pd.concat(all_puts, ignore_index=True) if all_puts else pd.DataFrame()
+
+        # Get a fresh spot price
+        spot_price = yf_ticker.history(period="1d")['Close'].iloc[-1]
+        if pd.isna(spot_price):
+            return jsonify({"error": "Could not retrieve current price for calculation."}), 500
+
+        # The find_zero_gamma_level method now works on aggregated DFs
+        # and expects an 'expirationDate' column in each.
+        calculator = GEXCalculator()
+        zero_gamma_level = calculator.find_zero_gamma_level(
+            current_spot_price=spot_price,
+            calls_df=calls_df,
+            puts_df=puts_df
+        )
+
+        return jsonify({
+            "ticker": ticker_symbol.upper(),
+            "selected_expirations": exp_dates,
+            "zero_gamma_level": zero_gamma_level
+        })
+
+    except Exception as e:
+        import traceback
+        print(f"Error in /calculate_zero_gamma: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"An error occurred during calculation: {str(e)}"}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

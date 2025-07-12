@@ -117,12 +117,12 @@ class GEXCalculator:
             "total_put_gex_usd": round(total_put_gex, 2)
         }
 
-    def _calculate_total_net_gex_for_price(self, hypothetical_spot_price, calls_df, puts_df, expiration_date_str):
+    def _calculate_total_net_gex_for_price(self, hypothetical_spot_price, calls_df, puts_df):
         """
-        Calculates the total Net GEX for a given hypothetical spot price and option data.
+        Calculates the total Net GEX for a given hypothetical spot price and aggregated option data.
+        Assumes calls_df and puts_df have an 'expirationDate' column.
         This is a helper for finding the zero gamma level.
         """
-        time_to_expiration_T = self._calculate_time_to_expiration(expiration_date_str)
         total_net_gex = 0.0
 
         # Process Calls
@@ -132,6 +132,7 @@ class GEXCalculator:
             iv = float(row.get('impliedVolatility', 0))
             if oi == 0 or iv == 0: continue
 
+            time_to_expiration_T = self._calculate_time_to_expiration(row['expirationDate'])
             gamma = self._black_scholes_gamma(hypothetical_spot_price, strike, time_to_expiration_T, iv)
             call_gex_value = oi * 100 * gamma * (hypothetical_spot_price**2) * 0.01
             total_net_gex += call_gex_value
@@ -143,16 +144,17 @@ class GEXCalculator:
             iv = float(row.get('impliedVolatility', 0))
             if oi == 0 or iv == 0: continue
 
+            time_to_expiration_T = self._calculate_time_to_expiration(row['expirationDate'])
             gamma = self._black_scholes_gamma(hypothetical_spot_price, strike, time_to_expiration_T, iv)
             put_gex_value = oi * 100 * gamma * (hypothetical_spot_price**2) * 0.01
             total_net_gex -= put_gex_value
 
         return total_net_gex
 
-    def find_zero_gamma_level(self, current_spot_price, calls_df, puts_df, expiration_date_str,
+    def find_zero_gamma_level(self, current_spot_price, calls_df, puts_df,
                               search_range_percent=0.20, steps=100):
         """
-        Finds the approximate stock price where Net GEX is zero for a given expiration.
+        Finds the approximate stock price where Net GEX is zero for the given aggregated option data.
         Uses a simple iterative search and interpolation.
 
         :param current_spot_price: The current market spot price, used as a center for the search.
@@ -177,7 +179,7 @@ class GEXCalculator:
             check_price = min_price + (i * price_step)
             if check_price <= 0: continue # Price must be positive
 
-            current_gex = self._calculate_total_net_gex_for_price(check_price, calls_df, puts_df, expiration_date_str)
+            current_gex = self._calculate_total_net_gex_for_price(check_price, calls_df, puts_df)
 
             if prev_gex is not None:
                 # Check for sign change (flip point)
