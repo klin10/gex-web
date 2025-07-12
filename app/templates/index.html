@@ -90,8 +90,15 @@
 
                 let resultHtml = `<h3>${data.ticker} - GEX Data</h3>`;
                 resultHtml += `<p><strong>Selected Expiration:</strong> ${data.selected_expiration_date}</p>`;
-                resultHtml += `<p><strong>Spot Price Used:</strong> $${data.spot_price_used.toFixed(2)}</p>`;
-                resultHtml += `<p><strong>Risk-Free Rate Used:</strong> ${(data.risk_free_rate_used * 100).toFixed(2)}%</p>`;
+                if (data.spot_price_used !== null && data.spot_price_used !== undefined) {
+                    resultHtml += `<p><strong>Spot Price Used (at calculation):</strong> $${data.spot_price_used.toFixed(2)}</p>`;
+                } else {
+                    resultHtml += `<p><strong>Spot Price Used (at calculation):</strong> N/A</p>`;
+                }
+                resultHtml += `<p><strong>Risk-Free Rate Used (for calculation):</strong> ${(data.risk_free_rate_used * 100).toFixed(2)}%</p>`;
+                if (data.data_source_timestamp) {
+                    resultHtml += `<p><small><em>Data as of: ${new Date(data.data_source_timestamp).toLocaleString()}</em></small></p>`;
+                }
 
                 if (data.gex_by_strike && data.gex_by_strike.length > 0) {
                     resultHtml += `<h4>Totals for ${data.selected_expiration_date}:</h4>`;
