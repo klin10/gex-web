@@ -10,29 +10,149 @@
     <form id="tickerForm">
         <label for="ticker">Enter Stock Ticker:</label>
         <input type="text" id="ticker" name="ticker" required>
-        <button type="submit">Get GEX Data</button>
+        <button type="submit">Get Data</button>
     </form>
-    <div id="gexResult">
+
+    <div id="controlsSection" style="margin-top: 20px; display: none;">
+        <label for="expirationDate">Select Expiration Date:</label>
+        <select id="expirationDate"></select>
+    </div>
+
+    <div id="gexResult" style="margin-top: 10px;">
         <!-- GEX data will be displayed here -->
     </div>
+
     <script>
-        document.getElementById('tickerForm').addEventListener('submit', async function(event) {
-            event.preventDefault();
-            const ticker = document.getElementById('ticker').value;
-            const response = await fetch(`/gex?ticker=${ticker}`);
-            const data = await response.json();
-            let resultHtml = '';
-            if (data.error) {
-                resultHtml = `<p style="color: red;">Error: ${data.error}</p>`;
-            } else {
-                resultHtml = `<h2>Data for ${data.ticker}</h2>
-                              <p><strong>Expiration Date Considered:</strong> ${data.selected_expiration_date}</p>
-                              <p><strong>Total Call Open Interest (shares):</strong> ${data.total_call_open_interest_shares.toLocaleString()}</p>
-                              <p><strong>Total Put Open Interest (shares):</strong> ${data.total_put_open_interest_shares.toLocaleString()}</p>
-                              <p><strong>Net Open Interest Exposure (shares):</strong> ${data.net_open_interest_exposure_shares.toLocaleString()}</p>
-                              <p><small><em>Note: ${data.calculation_note}</em></small></p>`;
+        const tickerForm = document.getElementById('tickerForm');
+        const tickerInput = document.getElementById('ticker');
+        const expirationSelect = document.getElementById('expirationDate');
+        const controlsSection = document.getElementById('controlsSection');
+        const gexResultDiv = document.getElementById('gexResult');
+
+        let currentTicker = '';
+        let currentExpirations = [];
+
+        async function fetchAndDisplayGEX(ticker, expiration = null) {
+            gexResultDiv.innerHTML = '<p>Loading GEX data...</p>';
+            let url = `/gex?ticker=${ticker}`;
+            if (expiration) {
+                url += `&expiration=${expiration}`;
             }
-            document.getElementById('gexResult').innerHTML = resultHtml;
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                currentTicker = ticker; // Store current ticker
+
+                if (data.error && !data.all_expiration_dates) { // Critical error, no dates
+                    gexResultDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+                    controlsSection.style.display = 'none';
+                    return;
+                }
+
+                // Populate expiration dropdown if not already populated or if ticker changed
+                // or if the provided list of expirations is different.
+                if (data.all_expiration_dates &&
+                    (currentExpirations.join(',') !== data.all_expiration_dates.join(','))) {
+                    currentExpirations = data.all_expiration_dates;
+                    expirationSelect.innerHTML = ''; // Clear existing options
+                    if (currentExpirations.length === 0) {
+                         gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates found for ${data.ticker || ticker}.</p>`;
+                         controlsSection.style.display = 'none';
+                         return;
+                    }
+                    currentExpirations.forEach(exp => {
+                        const option = document.createElement('option');
+                        option.value = exp;
+                        option.textContent = exp;
+                        expirationSelect.appendChild(option);
+                    });
+                }
+
+                if (data.selected_expiration_date && currentExpirations.length > 0) {
+                    expirationSelect.value = data.selected_expiration_date;
+                    controlsSection.style.display = 'block';
+                } else if (currentExpirations.length === 0 && !data.error) {
+                    // This case might happen if initial fetch had an error but then somehow recovered without dates
+                     gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates available for ${data.ticker || ticker}.</p>`;
+                     controlsSection.style.display = 'none';
+                     return;
+                }
+
+
+                if (data.error) { // Error specific to this expiration, but we might have dates
+                    gexResultDiv.innerHTML = `<p style="color: red;">Error for ${data.ticker || ticker} (Exp: ${expiration || 'default'}): ${data.error}</p>`;
+                    // Keep dropdown visible if dates were fetched
+                    return;
+                }
+
+
+                let resultHtml = `<h3>${data.ticker} - GEX Data</h3>`;
+                resultHtml += `<p><strong>Selected Expiration:</strong> ${data.selected_expiration_date}</p>`;
+                resultHtml += `<p><strong>Spot Price Used:</strong> $${data.spot_price_used.toFixed(2)}</p>`;
+                resultHtml += `<p><strong>Risk-Free Rate Used:</strong> ${(data.risk_free_rate_used * 100).toFixed(2)}%</p>`;
+
+                if (data.gex_by_strike && data.gex_by_strike.length > 0) {
+                    resultHtml += `<h4>Totals for ${data.selected_expiration_date}:</h4>`;
+                    resultHtml += `<p><strong>Total Call GEX:</strong> $${data.total_call_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+                    resultHtml += `<p><strong>Total Put GEX:</strong> $${data.total_put_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+                    resultHtml += `<p><strong>Total Net GEX:</strong> $${data.total_net_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+
+                    resultHtml += `<h4>GEX by Strike ($ per 1% move):</h4>`;
+                    resultHtml += `<table border="1" style="width:100%; border-collapse: collapse;">
+                                     <thead>
+                                       <tr>
+                                         <th>Strike</th>
+                                         <th>Call GEX ($)</th>
+                                         <th>Put GEX ($)</th>
+                                         <th>Net GEX ($)</th>
+                                       </tr>
+                                     </thead>
+                                     <tbody>`;
+                    data.gex_by_strike.forEach(item => {
+                        resultHtml += `<tr>
+                                         <td>${item.strike.toFixed(2)}</td>
+                                         <td>${item.call_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                         <td>${item.put_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                         <td style="font-weight: bold;">${item.net_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                       </tr>`;
+                    });
+                    resultHtml += `</tbody></table>`;
+                } else {
+                    resultHtml += `<p>No GEX data calculated for the selected criteria.</p>`;
+                }
+
+                if (data.calculation_notes) {
+                    resultHtml += `<h5>Calculation Notes:</h5><ul>`;
+                    data.calculation_notes.forEach(note => {
+                        resultHtml += `<li><small><em>${note}</em></small></li>`;
+                    });
+                    resultHtml += `</ul>`;
+                }
+                gexResultDiv.innerHTML = resultHtml;
+
+            } catch (error) {
+                console.error("Frontend error:", error);
+                gexResultDiv.innerHTML = `<p style="color: red;">Frontend error: ${error.message}. Check console for details.</p>`;
+                controlsSection.style.display = 'none';
+            }
+        }
+
+        tickerForm.addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const ticker = tickerInput.value.trim().toUpperCase();
+            if (ticker) {
+                currentExpirations = []; // Reset expirations on new ticker submit
+                controlsSection.style.display = 'none'; // Hide controls until data is loaded
+                fetchAndDisplayGEX(ticker);
+            }
+        });
+
+        expirationSelect.addEventListener('change', function(event) {
+            if (currentTicker) {
+                fetchAndDisplayGEX(currentTicker, event.target.value);
+            }
         });
     </script>
 </body>

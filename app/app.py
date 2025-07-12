@@ -3,12 +3,63 @@ from flask_caching import Cache
 import yfinance as yf
 import pandas as pd
 import datetime
+import numpy as np
+from scipy.stats import norm
+import math
 
 app = Flask(__name__)
 # Configure cache
 cache = Cache(app, config={'CACHE_TYPE': 'SimpleCache'}) # Simple in-memory cache
 
-# Helper function to find the next upcoming options expiration date
+# --- Black-Scholes Model Implementation ---
+RISK_FREE_RATE = 0.03 # Placeholder for risk-free rate (e.g., 3%)
+
+def calculate_time_to_expiration(exp_date_str):
+    """Calculates time to expiration in years from a YYYY-MM-DD string."""
+    exp_date = datetime.datetime.strptime(exp_date_str, '%Y-%m-%d').date()
+    today = datetime.date.today()
+    delta = exp_date - today
+    return max(delta.days / 365.25, 1e-6) # Avoid division by zero or negative time
+
+def black_scholes_gamma(S, K, T, r, sigma):
+    """
+    Calculates Black-Scholes Gamma for an option.
+    S: Spot price
+    K: Strike price
+    T: Time to expiration (years)
+    r: Risk-free rate
+    sigma: Implied volatility
+    """
+    if sigma == 0 or T == 0: # Avoid division by zero if sigma or T is zero
+        return 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    # pdf is n(d1) in the formula n(d1) / (S * sigma * sqrt(T))
+    gamma = norm.pdf(d1) / (S * sigma * math.sqrt(T))
+    return gamma
+
+# --- End Black-Scholes ---
+
+
+# Helper function to get all valid future expiration dates
+def get_all_future_expiration_dates(ticker_obj):
+    expirations = ticker_obj.options
+    if not expirations:
+        return []
+
+    today = datetime.date.today()
+    valid_expirations = []
+    for exp_str in expirations:
+        try:
+            exp_date = datetime.datetime.strptime(exp_str, '%Y-%m-%d').date()
+            if exp_date >= today:
+                valid_expirations.append(exp_str)
+        except ValueError:
+            continue
+
+    return sorted(valid_expirations)
+
+
+# Helper function to find the next upcoming options expiration date (will be used as default)
 def get_next_expiration_date(ticker_obj):
     expirations = ticker_obj.options
     if not expirations:
@@ -35,142 +86,137 @@ def index():
     return render_template('index.html')
 
 @app.route('/gex', methods=['GET'])
-@cache.cached(timeout=3600, query_string=True) # Cache for 1 hour, vary on query string (ticker)
-def get_gex_data_cached():
+@cache.cached(timeout=1800, query_string=True) # Cache for 30 mins
+def get_gex_data_detailed():
     ticker_symbol = request.args.get('ticker')
+    selected_exp_date_str = request.args.get('expiration')
+
     if not ticker_symbol:
         return jsonify({"error": "Ticker symbol is required"}), 400
 
     try:
-        stock = yf.Ticker(ticker_symbol)
+        stock_yf_ticker = yf.Ticker(ticker_symbol)
+        company_name = stock_yf_ticker.info.get('longName', ticker_symbol.upper())
 
-        # Get company name
-        company_name = stock.info.get('longName', ticker_symbol.upper())
+        all_exp_dates = get_all_future_expiration_dates(stock_yf_ticker)
+        if not all_exp_dates:
+            return jsonify({
+                "error": f"No options expiration dates found for {ticker_symbol}",
+                "ticker": company_name,
+                "all_expiration_dates": []
+            }), 404
 
-        # Get the closest (or next) expiration date for options
-        # yfinance returns a tuple of expiration dates
-        exp_date = get_next_expiration_date(stock)
-        if not exp_date:
-            return jsonify({"error": f"No options expiration dates found for {ticker_symbol}"}), 404
+        if selected_exp_date_str:
+            if selected_exp_date_str not in all_exp_dates:
+                return jsonify({"error": f"Selected expiration date {selected_exp_date_str} is not valid for {ticker_symbol}."}), 400
+            exp_date_to_fetch = selected_exp_date_str
+        else:
+            exp_date_to_fetch = all_exp_dates[0] # Default to the first available (nearest)
 
-        # Fetch options data for that expiration date
-        opt_chain = stock.option_chain(exp_date)
+        # --- Fetch Spot Price ---
+        try:
+            spot_price = stock_yf_ticker.history(period="1d")['Close'].iloc[-1]
+            if pd.isna(spot_price): # Handle potential NaN if history is empty or problematic
+                 return jsonify({"error": f"Could not retrieve current price for {ticker_symbol}. Price is NaN."}), 500
+        except IndexError: # Handle case where history is empty
+            return jsonify({"error": f"Could not retrieve current price for {ticker_symbol}. No history data."}), 500
+        except Exception as e: # Catch other history-related errors
+            print(f"Error fetching spot price for {ticker_symbol}: {e}")
+            return jsonify({"error": f"Could not retrieve current price for {ticker_symbol}. Error: {str(e)}"}), 500
 
-        calls = opt_chain.calls
-        puts = opt_chain.puts
 
-        # Simplified GEX calculation: (Total Call OI) - (Total Put OI)
-        # Each contract represents 100 shares
-        # A more accurate GEX would involve Gamma and Delta of each option
+        # --- Fetch Option Chain for selected expiration ---
+        opt_chain = stock_yf_ticker.option_chain(exp_date_to_fetch)
+        calls_df = opt_chain.calls
+        puts_df = opt_chain.puts
 
-        # Ensure 'openInterest' column exists and is numeric
-        if 'openInterest' not in calls.columns or 'openInterest' not in puts.columns:
-            return jsonify({"error": f"Open interest data not available for {ticker_symbol} on {exp_date}"}), 500
+        time_to_expiration_T = calculate_time_to_expiration(exp_date_to_fetch)
 
-        calls['openInterest'] = pd.to_numeric(calls['openInterest'], errors='coerce').fillna(0)
-        puts['openInterest'] = pd.to_numeric(puts['openInterest'], errors='coerce').fillna(0)
+        gex_data_by_strike = {} # Using dict to aggregate by strike
 
-        total_call_oi_value = int((calls['openInterest'] * 100).sum())
-        total_put_oi_value = int((puts['openInterest'] * 100).sum())
+        # Process Calls
+        for _, row in calls_df.iterrows():
+            strike = float(row['strike'])
+            oi = float(row.get('openInterest', 0))
+            iv = float(row.get('impliedVolatility', 0))
 
-        # This is a simplified GEX-like exposure.
-        # Positive value suggests dealers are net long gamma (market makers sold calls/bought puts)
-        # Negative value suggests dealers are net short gamma (market makers bought calls/sold puts)
-        # For GEX, it's typically (Call OI * Gamma_call) - (Put OI * Gamma_put), summed over strikes.
-        # Here, we are using a proxy: Sum(Call OI) - Sum(Put OI)
-        # The sign convention for GEX is often: Call GEX - Put GEX.
-        # Call GEX = Call OI * Gamma (positive)
-        # Put GEX = Put OI * Gamma (negative, because short puts have positive gamma, but GEX is exposure)
-        # For this simplified version:
-        # GEX = (Call OI * 100 shares/contract) - (Put OI * 100 shares/contract)
-        # This is more like "Net Open Interest Value" rather than true Gamma Exposure.
-        # Let's refine this slightly. Gamma exposure is the change in delta for a $1 move in underlying.
-        # Call Open Interest represents potential for positive gamma if market makers are short calls.
-        # Put Open Interest represents potential for positive gamma if market makers are short puts.
-        # GEX = Sum over strikes [ (OI_call * Gamma_call) - (OI_put * Gamma_put) ] * 100
-        # For a rough estimate without individual gammas:
-        # If dealers are short calls, they are long gamma. OI_call contributes positively.
-        # If dealers are short puts, they are long gamma. OI_put contributes positively.
-        # However, the market impact is what we care about.
-        # Let's stick to the common interpretation: GEX = sum(OI_call * gamma_c) - sum(OI_put * gamma_p)
-        # Without gamma, a simpler proxy is (Sum Call OI) - (Sum Put OI)
-        # Let's call this "Net Options Exposure" to be clear it's not true GEX.
+            if oi == 0 or iv == 0: # Skip if no OI or IV (Gamma would be 0 or undefined)
+                gamma = 0.0
+            else:
+                gamma = black_scholes_gamma(spot_price, strike, time_to_expiration_T, RISK_FREE_RATE, iv)
 
-        # The common formula for GEX ($ per 1% move) =
-        # Sum over all strikes [ (Call OI * Call Gamma * Underlying Price * 0.01)^2 - (Put OI * Put Gamma * Underlying Price * 0.01)^2 ] * 100
-        # This is too complex for now.
+            # GEX Value ($ per 1% move in underlying) for this specific call option series
+            # Formula: OI * 100 (shares/contract) * Gamma * SpotPrice^2 * 0.01
+            call_gex_value = oi * 100 * gamma * (spot_price**2) * 0.01
 
-        # Let's use the definition: Total Gamma = sum(gamma_call * OI_call * 100) + sum(gamma_put * OI_put * 100)
-        # Dollar Gamma = Total Gamma * Stock Price ^ 2 * 0.01
-        # GEX (Gamma Exposure) is often defined as the change in dealer's delta for a 1% move in the underlying.
-        # GEX = Sum over strikes [(Call OI * Call Delta) - (Put OI * abs(Put Delta))] * 100 shares
-        # This is also complex as it requires Delta.
+            if strike not in gex_data_by_strike:
+                gex_data_by_strike[strike] = {'call_gex': 0.0, 'put_gex': 0.0, 'net_gex': 0.0}
+            gex_data_by_strike[strike]['call_gex'] += call_gex_value
+            gex_data_by_strike[strike]['net_gex'] += call_gex_value
 
-        # Sticking to a very simplified approach based on OI only for now:
-        # Net Call OI = sum(calls['openInterest'])
-        # Net Put OI = sum(puts['openInterest'])
-        # Simplified Exposure = (Net Call OI - Net Put OI) * 100 (shares)
-        # This is a proxy for directional bias more than gamma exposure.
+        # Process Puts
+        for _, row in puts_df.iterrows():
+            strike = float(row['strike'])
+            oi = float(row.get('openInterest', 0))
+            iv = float(row.get('impliedVolatility', 0))
 
-        # Let's use the formula from a known source:
-        # GEX = Σ (Call OI * Call Gamma) - Σ (Put OI * Put Gamma)
-        # Since we don't have Gamma easily from yfinance basic calls, we'll use a proxy.
-        # A common simplified proxy for GEX is based on OI and assumes gamma is positive for calls and negative for puts from the market maker's perspective if they are short options.
-        # GEX = (Sum of Call Open Interest * 100 shares) - (Sum of Put Open Interest * 100 shares)
-        # This calculates the net number of shares dealers would have to buy/sell to remain delta neutral if they are short these options and the stock price moves.
-        # If GEX is positive, dealers are net short calls / long puts, and would buy as price rises, sell as price falls (stabilizing).
-        # If GEX is negative, dealers are net long calls / short puts, and would sell as price rises, buy as price falls (destabilizing).
-        # Wait, the interpretation of GEX sign can vary.
-        # Let's use: GEX = Sum over strikes [OI_c * Gamma_c - OI_p * Gamma_p] * 100
-        # Without Gamma, the most basic proxy is simply looking at OI.
-        # Total Call OI value vs Total Put OI value.
-        # If we assume market makers are typically net short options (provide liquidity):
-        # Short calls = +Gamma exposure for MM
-        # Short puts = +Gamma exposure for MM
-        # So, Total Gamma Exposure ~ (Call OI + Put OI) * AvgGamma * 100. This is not GEX.
+            if oi == 0 or iv == 0:
+                gamma = 0.0
+            else:
+                gamma = black_scholes_gamma(spot_price, strike, time_to_expiration_T, RISK_FREE_RATE, iv)
 
-        # Let's use the definition from SqueezeMetrics:
-        # GEX = (Call Open Interest * Call Gamma) - (Put Open Interest * Put Gamma), summed across all strikes.
-        # Gamma is positive for long calls and long puts.
-        # If market makers are net short, their gamma exposure is negative of this.
-        # For simplicity, if we cannot get Gamma, we will report Call OI and Put OI separately.
+            # GEX Value ($ per 1% move in underlying) for this specific put option series
+            # Formula: OI * 100 (shares/contract) * Gamma * SpotPrice^2 * 0.01
+            # Note: In the net GEX formula, Put GEX is subtracted. So we calculate its magnitude here.
+            put_gex_value = oi * 100 * gamma * (spot_price**2) * 0.01
 
-        # Given the limitations of yfinance not directly providing gamma per strike easily,
-        # I will calculate a "Net OI Exposure" which is Call OI - Put OI.
-        # This is a common simplification, though not true GEX.
-        # GEX = (call open interest – put open interest) * 100 (shares per contract) * share price
-        # This is dollar GEX. We'll calculate share GEX.
+            if strike not in gex_data_by_strike:
+                gex_data_by_strike[strike] = {'call_gex': 0.0, 'put_gex': 0.0, 'net_gex': 0.0}
+            gex_data_by_strike[strike]['put_gex'] += put_gex_value
+            gex_data_by_strike[strike]['net_gex'] -= put_gex_value # Subtracting Put GEX
 
-        # Net OI in shares = (Sum of Call OI - Sum of Put OI) * 100
-        net_oi_exposure_shares = int(total_call_oi_value - total_put_oi_value)
+        # Convert dict to sorted list for response
+        # And calculate total net GEX
+        strike_data_list = []
+        total_net_gex = 0.0
+        total_call_gex = 0.0
+        total_put_gex = 0.0
 
-        # current_price = stock.history(period="1d")['Close'].iloc[-1] # Not used in current response
-        # Dollar GEX (approx) = Net OI Exposure (shares) * Current Price
-        # This interpretation is: if price moves $1, how much value dealers need to trade.
-        # No, GEX is typically $ per 1% move.
-        # Dollar Gamma = Sum (Gamma * OI * 100 * Stock Price^2 * 0.01)
-
-        # Let's stick to the most basic interpretation of GEX for now, which is often
-        # presented as the total gamma from calls minus total gamma from puts.
-        # Since we don't have gamma, we'll use OI as a proxy.
-        # This is a simplification. A positive value would imply more call OI than put OI.
-        # A common way to calculate GEX (simplified):
-        # GEX_per_strike = (Call_OI * 100) - (Put_OI * 100)
-        # Total_GEX = sum(GEX_per_strike)
-        # This is effectively what `net_oi_exposure_shares` calculates.
+        for strike_price in sorted(gex_data_by_strike.keys()):
+            data = gex_data_by_strike[strike_price]
+            strike_data_list.append({
+                "strike": strike_price,
+                "call_gex_usd": round(data['call_gex'], 2),
+                "put_gex_usd": round(data['put_gex'], 2),
+                "net_gex_usd": round(data['net_gex'], 2)
+            })
+            total_net_gex += data['net_gex']
+            total_call_gex += data['call_gex']
+            total_put_gex += data['put_gex']
 
         return jsonify({
             "ticker": company_name,
-            "selected_expiration_date": exp_date,
-            "total_call_open_interest_shares": total_call_oi_value,
-            "total_put_open_interest_shares": total_put_oi_value,
-            "net_open_interest_exposure_shares": net_oi_exposure_shares,
-            "calculation_note": "This is a simplified GEX-like exposure based on Net Open Interest (Call OI - Put OI). True GEX requires individual option gamma values."
+            "all_expiration_dates": all_exp_dates,
+            "selected_expiration_date": exp_date_to_fetch,
+            "spot_price_used": round(spot_price, 2),
+            "risk_free_rate_used": RISK_FREE_RATE,
+            "time_to_expiration_years_used": round(time_to_expiration_T, 4),
+            "gex_by_strike": strike_data_list,
+            "total_net_gex_usd": round(total_net_gex, 2),
+            "total_call_gex_usd": round(total_call_gex, 2),
+            "total_put_gex_usd": round(total_put_gex, 2),
+            "calculation_notes": [
+                "GEX is Gamma Exposure in USD per 1% move in the underlying stock price.",
+                "Formula per option: OI * 100 * Calculated_Gamma * SpotPrice^2 * 0.01.",
+                "Calculated_Gamma is derived using Black-Scholes model.",
+                "Net GEX = Call GEX - Put GEX."
+            ]
         })
 
     except Exception as e:
         # Log the exception e for debugging
-        print(f"Error fetching or processing data for {ticker_symbol}: {e}")
+        import traceback
+        print(f"Error processing /gex for {ticker_symbol} (exp: {selected_exp_date_str}): {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Failed to retrieve or process GEX data for {ticker_symbol}. Error: {str(e)}"}), 500
 
 if __name__ == '__main__':
