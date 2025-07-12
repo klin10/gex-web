@@ -2,29 +2,132 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GEX Viewer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <style>
+        /* Basic Tailwind-like styling for better aesthetics */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 30px;
+        }
+        form, #controlsSection, #gexResult, #chartContainer {
+            background-color: #ffffff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 600px;
+            box-sizing: border-box;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"], select {
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #gexResult h3, #gexResult h4, #gexResult h5 {
+            color: #2c3e50;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        #gexResult p {
+            margin-bottom: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            border-radius: 8px;
+            overflow: hidden; /* Ensures rounded corners apply to table */
+        }
+        th, td {
+            border: 1px solid #e0e0e0;
+            padding: 10px 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f8f8;
+            font-weight: bold;
+            color: #444;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        #chartContainer {
+            background-color: #ffffff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 900px;
+            margin: 20px auto;
+            box-sizing: border-box;
+        }
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            form, #controlsSection, #gexResult, #chartContainer {
+                padding: 15px;
+                max-width: 95%;
+            }
+            input[type="text"], select, button {
+                width: 100%;
+            }
+        }
+    </style>
 </head>
 <body>
     <h1>Stock GEX Viewer</h1>
-    <form id="tickerForm">
+    <form id="tickerForm" class="rounded-lg">
         <label for="ticker">Enter Stock Ticker:</label>
-        <input type="text" id="ticker" name="ticker" required>
-        <button type="submit">Get Data</button>
+        <input type="text" id="ticker" name="ticker" required class="rounded-lg">
+        <button type="submit" class="rounded-lg">Get Data</button>
     </form>
 
-    <div id="controlsSection" style="margin-top: 20px; display: none;">
-        <label for="expirationDate">Select Expiration Date(s):</label>
-        <select id="expirationDate" multiple size="5" style="vertical-align: top;"></select>
-        <button id="selectAllExpirations" type="button" style="vertical-align: top; margin-left: 5px;">Select All</button>
+    <div id="controlsSection" style="margin-top: 20px; display: none;" class="rounded-lg">
+        <label for="expirationDate">Select Expiration Date:</label>
+        <select id="expirationDate" class="rounded-lg"></select>
     </div>
 
-    <div id="gexResult" style="margin-top: 10px;">
+    <div id="gexResult" style="margin-top: 10px;" class="rounded-lg">
         <!-- GEX data table will be displayed here -->
     </div>
 
-    <div id="chartContainer" style="width: 80%; max-width: 900px; margin: 20px auto; display: none;">
+    <div id="chartContainer" style="width: 80%; max-width: 900px; margin: 20px auto; display: none;" class="rounded-lg">
         <canvas id="gexChart"></canvas>
     </div>
 
@@ -41,12 +144,14 @@
         let currentExpirations = [];
         let gexChart = null; // To hold the chart instance
 
-        async function fetchAndDisplayGEX(ticker, expirations = []) {
+        async function fetchAndDisplayGEX(ticker, expiration = null) {
             gexResultDiv.innerHTML = '<p>Loading GEX data...</p>';
+            chartContainer.style.display = 'none'; // Hide chart while loading
 
-            let url = new URL(window.location.origin + '/gex');
-            url.searchParams.append('ticker', ticker);
-            expirations.forEach(exp => url.searchParams.append('expiration', exp));
+            let url = `/gex?ticker=${ticker}`;
+            if (expiration) {
+                url += `&expiration=${expiration}`;
+            }
 
             try {
                 const response = await fetch(url);
@@ -67,9 +172,9 @@
                     currentExpirations = data.all_expiration_dates;
                     expirationSelect.innerHTML = ''; // Clear existing options
                     if (currentExpirations.length === 0) {
-                         gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates found for ${data.ticker || ticker}.</p>`;
-                         controlsSection.style.display = 'none';
-                         return;
+                        gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates found for ${data.ticker || ticker}.</p>`;
+                        controlsSection.style.display = 'none';
+                        return;
                     }
                     currentExpirations.forEach(exp => {
                         const option = document.createElement('option');
@@ -79,19 +184,14 @@
                     });
                 }
 
-                // Handle single or multiple selected dates from backend
-                const selectedDates = Array.isArray(data.selected_expiration_date) ? data.selected_expiration_date : [data.selected_expiration_date];
-
-                if (selectedDates.length > 0 && currentExpirations.length > 0) {
-                    Array.from(expirationSelect.options).forEach(opt => {
-                        opt.selected = selectedDates.includes(opt.value);
-                    });
+                if (data.selected_expiration_date && currentExpirations.length > 0) {
+                    expirationSelect.value = data.selected_expiration_date;
                     controlsSection.style.display = 'block';
                 } else if (currentExpirations.length === 0 && !data.error) {
                     // This case might happen if initial fetch had an error but then somehow recovered without dates
-                     gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates available for ${data.ticker || ticker}.</p>`;
-                     controlsSection.style.display = 'none';
-                     return;
+                    gexResultDiv.innerHTML = `<p style="color: orange;">No option expiration dates available for ${data.ticker || ticker}.</p>`;
+                    controlsSection.style.display = 'none';
+                    return;
                 }
 
 
@@ -103,27 +203,26 @@
 
 
                 let resultHtml = `<h3>${data.ticker} - GEX Data</h3>`;
-                const selectedDates = Array.isArray(data.selected_expiration_date) ? data.selected_expiration_date : [data.selected_expiration_date];
-                resultHtml += `<p><strong>Selected Expiration(s):</strong> ${selectedDates.join(', ')}</p>`;
-
+                resultHtml += `<p><strong>Selected Expiration:</strong> ${data.selected_expiration_date}</p>`;
                 if (data.spot_price_used !== null && data.spot_price_used !== undefined) {
-                    resultHtml += `<p><strong>Spot Price Used (latest):</strong> $${data.spot_price_used.toFixed(2)}</p>`;
+                    resultHtml += `<p><strong>Spot Price Used (at calculation):</strong> $${data.spot_price_used.toFixed(2)}</p>`;
                 } else {
-                    resultHtml += `<p><strong>Spot Price Used (latest):</strong> N/A</p>`;
+                    resultHtml += `<p><strong>Spot Price Used (at calculation):</strong> N/A</p>`;
                 }
                 resultHtml += `<p><strong>Risk-Free Rate Used (for calculation):</strong> ${(data.risk_free_rate_used * 100).toFixed(2)}%</p>`;
-
-                // Only show Zero Gamma if a single expiration is selected
-                if (selectedDates.length === 1) {
-                    if (data.zero_gamma_level) {
-                        resultHtml += `<p style="font-weight: bold; color: #0056b3;"><strong>Zero Gamma Level (Gamma Flip):</strong> $${data.zero_gamma_level.toFixed(2)}</p>`;
-                    } else {
-                        resultHtml += `<p><strong>Zero Gamma Level (Gamma Flip):</strong> Not found in search range.</p>`;
-                    }
+                if (data.zero_gamma_level) {
+                    resultHtml += `<p style="font-weight: bold; color: #0056b3;"><strong>Zero Gamma Level (Gamma Flip):</strong> $${data.zero_gamma_level.toFixed(2)}</p>`;
+                } else {
+                    resultHtml += `<p><strong>Zero Gamma Level (Gamma Flip):</strong> Not found in search range.</p>`;
                 }
-
+                // FIX: Check if data.data_source_timestamp is valid before calling toLocaleString()
                 if (data.data_source_timestamp) {
-                    resultHtml += `<p><small><em>Data as of: ${new Date(data.data_source_timestamp).toLocaleString()}</em></small></p>`;
+                    const timestampDate = new Date(data.data_source_timestamp);
+                    if (!isNaN(timestampDate.getTime())) { // Check if it's a valid date
+                        resultHtml += `<p><small><em>Data as of: ${timestampDate.toLocaleString()}</em></small></p>`;
+                    } else {
+                        resultHtml += `<p><small><em>Data as of: Invalid Date</em></small></p>`;
+                    }
                 }
 
                 if (data.gex_by_strike && data.gex_by_strike.length > 0) {
@@ -135,22 +234,24 @@
 
                     resultHtml += `<h4>GEX by Strike ($ per 1% move):</h4>`;
                     resultHtml += `<table border="1" style="width:100%; border-collapse: collapse;">
-                                     <thead>
-                                       <tr>
-                                         <th>Strike</th>
-                                         <th>Call GEX ($)</th>
-                                         <th>Put GEX ($)</th>
-                                         <th>Net GEX ($)</th>
-                                       </tr>
-                                     </thead>
-                                     <tbody>`;
+                                    <thead>
+                                        <tr>
+                                            <th>Strike</th>
+                                            <th>Call GEX ($)</th>
+                                            <th>Put GEX ($)</th>
+                                            <th>Net GEX ($)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>`;
                     data.gex_by_strike.forEach(item => {
+                        // FIX: Add nullish coalescing for item.call_gex_usd, item.put_gex_usd, item.net_gex_usd
+                        // in case they are null/undefined from the backend
                         resultHtml += `<tr>
-                                         <td>${item.strike.toFixed(2)}</td>
-                                         <td>${item.call_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                                         <td>${item.put_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                                         <td style="font-weight: bold;">${item.net_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                                       </tr>`;
+                                            <td>${(item.strike ?? 0).toFixed(2)}</td>
+                                            <td>${(item.call_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                            <td>${(item.put_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                            <td style="font-weight: bold;">${(item.net_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                        </tr>`;
                     });
                     resultHtml += `</tbody></table>`;
                 } else {
@@ -174,11 +275,11 @@
 
                 if (data.gex_by_strike && data.gex_by_strike.length > 0) {
                     chartContainer.style.display = 'block';
-                    const strikes = data.gex_by_strike.map(item => item.strike.toFixed(2));
-                    const callGEXData = data.gex_by_strike.map(item => item.call_gex_usd);
+                    const strikes = data.gex_by_strike.map(item => (item.strike ?? 0).toFixed(2)); // FIX: Add nullish coalescing
+                    const callGEXData = data.gex_by_strike.map(item => (item.call_gex_usd ?? 0)); // FIX: Add nullish coalescing
                     // Negate Put GEX data for downward plotting
-                    const putGEXData = data.gex_by_strike.map(item => -item.put_gex_usd);
-                    const netGEXData = data.gex_by_strike.map(item => item.net_gex_usd);
+                    const putGEXData = data.gex_by_strike.map(item => -(item.put_gex_usd ?? 0)); // FIX: Add nullish coalescing
+                    const netGEXData = data.gex_by_strike.map(item => (item.net_gex_usd ?? 0)); // FIX: Add nullish coalescing
 
                     gexChart = new Chart(gexChartCanvas, {
                         type: 'bar',
@@ -240,7 +341,7 @@
                                         footer: function(tooltipItems) {
                                             const dataIndex = tooltipItems[0].dataIndex;
                                             const netGexValue = netGEXData[dataIndex];
-                                            return 'Net GEX: $' + netGexValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                            return 'Net GEX: $' + (netGexValue ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); // FIX: Add nullish coalescing
                                         }
                                     }
                                 }
@@ -263,27 +364,16 @@
             event.preventDefault();
             const ticker = tickerInput.value.trim().toUpperCase();
             if (ticker) {
-                currentExpirations = []; // Reset expirations
-                chartContainer.style.display = 'none';
-                controlsSection.style.display = 'none';
-                // Fetch with no specific expiration, backend will default to first available
-                fetchAndDisplayGEX(ticker, []);
+                currentExpirations = []; // Reset expirations on new ticker submit
+                controlsSection.style.display = 'none'; // Hide controls until data is loaded
+                fetchAndDisplayGEX(ticker);
             }
         });
 
-        expirationSelect.addEventListener('change', function() {
+        expirationSelect.addEventListener('change', function(event) {
             if (currentTicker) {
-                const selectedExpirations = Array.from(expirationSelect.selectedOptions).map(opt => opt.value);
-                if (selectedExpirations.length > 0) {
-                    fetchAndDisplayGEX(currentTicker, selectedExpirations);
-                }
+                fetchAndDisplayGEX(currentTicker, event.target.value);
             }
-        });
-
-        document.getElementById('selectAllExpirations').addEventListener('click', function() {
-            Array.from(expirationSelect.options).forEach(opt => opt.selected = true);
-            // Manually trigger the change event to reload data
-            expirationSelect.dispatchEvent(new Event('change'));
         });
     </script>
 </body>
