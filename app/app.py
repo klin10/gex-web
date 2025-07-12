@@ -1,7 +1,7 @@
 import datetime
 import os
 from flask import Flask, render_template, request, jsonify
-from .models import db, Ticker, Expiration, GEXStrikeData
+from .models import db, Ticker, Expiration, GEXStrikeData # Corrected relative import
 from .gex_calculator import GEXCalculator # Needed for default risk rate
 
 app = Flask(__name__)
