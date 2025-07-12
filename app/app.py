@@ -160,6 +160,8 @@ def get_gex_data_from_db():
     # The zero_gamma_level is now calculated by a separate endpoint.
     # We remove it from this response.
 
+    final_strike_list = [s['strike'] for s in gex_strikes_to_display]
+
     return jsonify({
         "ticker": company_name,
         "all_expiration_dates": all_exp_dates_db,
@@ -167,6 +169,7 @@ def get_gex_data_from_db():
         "spot_price_used": round(spot_price_at_calc, 2) if spot_price_at_calc else None,
         "risk_free_rate_used": GEXCalculator().risk_free_rate,
         "gex_by_strike": strike_data_list_resp,
+        "final_strike_list": final_strike_list, # Add list of filtered strikes
         "total_net_gex_usd": round(total_net_gex, 2),
         "total_call_gex_usd": round(total_call_gex, 2),
         "total_put_gex_usd": round(total_put_gex, 2),
@@ -190,11 +193,13 @@ def init_db_command():
 def calculate_zero_gamma_endpoint():
     ticker_symbol = request.args.get('ticker')
     exp_dates = request.args.getlist('expiration')
+    strikes_to_include_str = request.args.getlist('strikes')
 
     if not ticker_symbol or not exp_dates:
         return jsonify({"error": "Ticker and at least one expiration date are required."}), 400
 
     try:
+        strikes_to_include = [float(s) for s in strikes_to_include_str] if strikes_to_include_str else None
         yf_ticker = yf.Ticker(ticker_symbol)
 
         # Fetch fresh data from yfinance for the calculation
@@ -226,7 +231,8 @@ def calculate_zero_gamma_endpoint():
         zero_gamma_level = calculator.find_zero_gamma_level(
             current_spot_price=spot_price,
             calls_df=calls_df,
-            puts_df=puts_df
+            puts_df=puts_df,
+            strikes_to_include=strikes_to_include
         )
 
         return jsonify({
