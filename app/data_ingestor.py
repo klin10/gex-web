@@ -129,6 +129,19 @@ def ingest_ticker_data(ticker_symbol, db_session):
             db_session.rollback()
             continue
 
+        # --- Calculate Zero Gamma Level ---
+        print(f"    Calculating zero gamma level...")
+        zero_gamma_level = calculator.find_zero_gamma_level(
+            current_spot_price=spot_price,
+            calls_df=calls_df,
+            puts_df=puts_df,
+            expiration_date_str=exp_date_str
+        )
+        if zero_gamma_level is not None:
+            print(f"    Found zero gamma level: {zero_gamma_level}")
+
+        # --- Store results in DB ---
+        expiration_orm.zero_gamma_level = zero_gamma_level # Store the found level
         db_session.query(GEXStrikeData).filter_by(expiration_id=expiration_orm.id).delete()
 
         # Need to commit here to get expiration_orm.id if it's new

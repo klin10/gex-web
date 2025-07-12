@@ -116,3 +116,81 @@ class GEXCalculator:
             "total_call_gex_usd": round(total_call_gex, 2),
             "total_put_gex_usd": round(total_put_gex, 2)
         }
+
+    def _calculate_total_net_gex_for_price(self, hypothetical_spot_price, calls_df, puts_df, expiration_date_str):
+        """
+        Calculates the total Net GEX for a given hypothetical spot price and option data.
+        This is a helper for finding the zero gamma level.
+        """
+        time_to_expiration_T = self._calculate_time_to_expiration(expiration_date_str)
+        total_net_gex = 0.0
+
+        # Process Calls
+        for _, row in calls_df.iterrows():
+            strike = float(row['strike'])
+            oi = float(row.get('openInterest', 0))
+            iv = float(row.get('impliedVolatility', 0))
+            if oi == 0 or iv == 0: continue
+
+            gamma = self._black_scholes_gamma(hypothetical_spot_price, strike, time_to_expiration_T, iv)
+            call_gex_value = oi * 100 * gamma * (hypothetical_spot_price**2) * 0.01
+            total_net_gex += call_gex_value
+
+        # Process Puts
+        for _, row in puts_df.iterrows():
+            strike = float(row['strike'])
+            oi = float(row.get('openInterest', 0))
+            iv = float(row.get('impliedVolatility', 0))
+            if oi == 0 or iv == 0: continue
+
+            gamma = self._black_scholes_gamma(hypothetical_spot_price, strike, time_to_expiration_T, iv)
+            put_gex_value = oi * 100 * gamma * (hypothetical_spot_price**2) * 0.01
+            total_net_gex -= put_gex_value
+
+        return total_net_gex
+
+    def find_zero_gamma_level(self, current_spot_price, calls_df, puts_df, expiration_date_str,
+                              search_range_percent=0.20, steps=100):
+        """
+        Finds the approximate stock price where Net GEX is zero for a given expiration.
+        Uses a simple iterative search and interpolation.
+
+        :param current_spot_price: The current market spot price, used as a center for the search.
+        :param calls_df: DataFrame of call options.
+        :param puts_df: DataFrame of put options.
+        :param expiration_date_str: The expiration date string.
+        :param search_range_percent: Percentage range around current_spot_price to search (e.g., 0.20 for +/- 20%).
+        :param steps: Number of steps to divide the search range into.
+        :return: Approximate price for zero gamma, or None if not found or data insufficient.
+        """
+        if calls_df.empty and puts_df.empty:
+            return None # Cannot calculate if no options
+
+        min_price = current_spot_price * (1 - search_range_percent)
+        max_price = current_spot_price * (1 + search_range_percent)
+        price_step = (max_price - min_price) / steps
+
+        prev_price = None
+        prev_gex = None
+
+        for i in range(steps + 1):
+            check_price = min_price + (i * price_step)
+            if check_price <= 0: continue # Price must be positive
+
+            current_gex = self._calculate_total_net_gex_for_price(check_price, calls_df, puts_df, expiration_date_str)
+
+            if prev_gex is not None:
+                # Check for sign change (flip point)
+                if (current_gex > 0 and prev_gex < 0) or (current_gex < 0 and prev_gex > 0):
+                    # Linear interpolation to find the zero crossing
+                    # Formula: zero_price = price1 - gex1 * (price2 - price1) / (gex2 - gex1)
+                    zero_gamma_price = prev_price - prev_gex * (check_price - prev_price) / (current_gex - prev_gex)
+                    return round(zero_gamma_price, 2)
+                if current_gex == 0: # Exact zero found
+                    return round(check_price, 2)
+
+            prev_price = check_price
+            prev_gex = current_gex
+
+        print(f"Zero gamma level not found within {search_range_percent*100}% range of {current_spot_price} for {expiration_date_str}. Last GEX: {prev_gex:.2f} at price {prev_price:.2f}")
+        return None # No flip point found in the range

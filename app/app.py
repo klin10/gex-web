@@ -110,6 +110,7 @@ def get_gex_data_from_db():
         "selected_expiration_date": selected_exp_date_to_display,
         "spot_price_used": round(spot_price_at_calc, 2) if spot_price_at_calc else None,
         "risk_free_rate_used": GEXCalculator().risk_free_rate, # Using default from calculator
+        "zero_gamma_level": expiration_to_query_orm.zero_gamma_level, # Add the new field
         "gex_by_strike": strike_data_list_resp,
         "total_net_gex_usd": round(total_net_gex, 2),
         "total_call_gex_usd": round(total_call_gex, 2),

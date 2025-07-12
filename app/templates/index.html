@@ -104,15 +104,21 @@
                     resultHtml += `<p><strong>Spot Price Used (at calculation):</strong> N/A</p>`;
                 }
                 resultHtml += `<p><strong>Risk-Free Rate Used (for calculation):</strong> ${(data.risk_free_rate_used * 100).toFixed(2)}%</p>`;
+                if (data.zero_gamma_level) {
+                    resultHtml += `<p style="font-weight: bold; color: #0056b3;"><strong>Zero Gamma Level (Gamma Flip):</strong> $${data.zero_gamma_level.toFixed(2)}</p>`;
+                } else {
+                    resultHtml += `<p><strong>Zero Gamma Level (Gamma Flip):</strong> Not found in search range.</p>`;
+                }
                 if (data.data_source_timestamp) {
                     resultHtml += `<p><small><em>Data as of: ${new Date(data.data_source_timestamp).toLocaleString()}</em></small></p>`;
                 }
 
                 if (data.gex_by_strike && data.gex_by_strike.length > 0) {
                     resultHtml += `<h4>Totals for ${data.selected_expiration_date}:</h4>`;
-                    resultHtml += `<p><strong>Total Call GEX:</strong> $${data.total_call_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
-                    resultHtml += `<p><strong>Total Put GEX:</strong> $${data.total_put_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
-                    resultHtml += `<p><strong>Total Net GEX:</strong> $${data.total_net_gex_usd.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+                    // Add checks for null/undefined before calling toLocaleString
+                    resultHtml += `<p><strong>Total Call GEX:</strong> $${(data.total_call_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+                    resultHtml += `<p><strong>Total Put GEX:</strong> $${(data.total_put_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
+                    resultHtml += `<p><strong>Total Net GEX:</strong> $${(data.total_net_gex_usd ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>`;
 
                     resultHtml += `<h4>GEX by Strike ($ per 1% move):</h4>`;
                     resultHtml += `<table border="1" style="width:100%; border-collapse: collapse;">
@@ -157,8 +163,8 @@
                     chartContainer.style.display = 'block';
                     const strikes = data.gex_by_strike.map(item => item.strike.toFixed(2));
                     const callGEXData = data.gex_by_strike.map(item => item.call_gex_usd);
-                    const putGEXData = data.gex_by_strike.map(item => item.put_gex_usd);
-                    // For tooltip, we need Net GEX data available per strike
+                    // Negate Put GEX data for downward plotting
+                    const putGEXData = data.gex_by_strike.map(item => -item.put_gex_usd);
                     const netGEXData = data.gex_by_strike.map(item => item.net_gex_usd);
 
                     gexChart = new Chart(gexChartCanvas, {
@@ -175,7 +181,7 @@
                                 },
                                 {
                                     label: 'Put GEX ($)',
-                                    data: putGEXData,
+                                    data: putGEXData, // Now contains negative values
                                     backgroundColor: 'rgba(255, 99, 132, 0.6)',
                                     borderColor: 'rgba(255, 99, 132, 1)',
                                     borderWidth: 1
@@ -184,14 +190,20 @@
                         },
                         options: {
                             responsive: true,
-                            maintainAspectRatio: true, // Adjust as needed, true by default
                             scales: {
                                 x: {
+                                    stacked: true, // Stack bars on the same category
                                     title: { display: true, text: 'Strike Price' }
                                 },
                                 y: {
+                                    stacked: false,
                                     title: { display: true, text: 'Gamma Exposure ($ Amount)' },
-                                    beginAtZero: false // Allow negative if net GEX was plotted directly
+                                    ticks: {
+                                        callback: function(value, index, values) {
+                                            // Show absolute values on the y-axis ticks
+                                            return '$' + Math.abs(value).toLocaleString();
+                                        }
+                                    }
                                 }
                             },
                             plugins: {
@@ -207,13 +219,12 @@
                                                 label += ': ';
                                             }
                                             if (context.parsed.y !== null) {
-                                                label += '$' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                                // Show absolute value in tooltip
+                                                label += '$' + Math.abs(context.parsed.y).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                                             }
                                             return label;
                                         },
                                         footer: function(tooltipItems) {
-                                            // Display Net GEX in the footer of the tooltip
-                                            // We need to access the original data point index
                                             const dataIndex = tooltipItems[0].dataIndex;
                                             const netGexValue = netGEXData[dataIndex];
                                             return 'Net GEX: $' + netGexValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});

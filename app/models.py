@@ -21,6 +21,7 @@ class Expiration(db.Model):
     ticker_id = db.Column(db.Integer, db.ForeignKey('ticker.id'), nullable=False)
     date = db.Column(db.Date, nullable=False)
     last_fetched_gex = db.Column(db.DateTime) # Will be set by ingestor as naive UTC
+    zero_gamma_level = db.Column(db.Float, nullable=True) # Price where Net GEX flips
 
     ticker = relationship("Ticker", back_populates="expirations")
     strikes = relationship("GEXStrikeData", back_populates="expiration", cascade="all, delete-orphan")
