@@ -147,13 +147,39 @@ def ingest_ticker_data(ticker_symbol, db_session):
         # Need to commit here to get expiration_orm.id if it's new
         db_session.commit()
 
-        for strike_data in gex_results['gex_by_strike']:
+        # Combine GEX results with OI data
+        # First, create a dictionary from gex_results for easy lookup
+        gex_map = {item['strike']: item for item in gex_results['gex_by_strike']}
+
+        # Create a combined data structure for OI
+        oi_map = {}
+        for _, row in calls_df.iterrows():
+            strike = float(row['strike'])
+            oi = row.get('openInterest', 0)
+            if strike not in oi_map:
+                oi_map[strike] = {'call_oi': 0, 'put_oi': 0}
+            if not pd.isna(oi):
+                oi_map[strike]['call_oi'] += int(oi)
+
+        for _, row in puts_df.iterrows():
+            strike = float(row['strike'])
+            oi = row.get('openInterest', 0)
+            if strike not in oi_map:
+                oi_map[strike] = {'call_oi': 0, 'put_oi': 0}
+            if not pd.isna(oi):
+                oi_map[strike]['put_oi'] += int(oi)
+
+        # Now, create the GEXStrikeData records
+        for strike, gex_data in gex_map.items():
+            oi_data = oi_map.get(strike, {'call_oi': 0, 'put_oi': 0})
             gex_strike_orm = GEXStrikeData(
                 expiration_id=expiration_orm.id,
-                strike=strike_data['strike'],
-                call_gex_usd=strike_data['call_gex_usd'],
-                put_gex_usd=strike_data['put_gex_usd'],
-                net_gex_usd=strike_data['net_gex_usd'],
+                strike=gex_data['strike'],
+                call_gex_usd=gex_data['call_gex_usd'],
+                put_gex_usd=gex_data['put_gex_usd'],
+                net_gex_usd=gex_data['net_gex_usd'],
+                call_oi=oi_data['call_oi'],
+                put_oi=oi_data['put_oi'],
                 spot_price_at_calculation=gex_results['spot_price_used'],
                 calculation_timestamp=datetime.datetime.utcnow()
             )

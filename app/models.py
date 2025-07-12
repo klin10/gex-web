@@ -40,6 +40,10 @@ class GEXStrikeData(db.Model):
     put_gex_usd = db.Column(db.Float)
     net_gex_usd = db.Column(db.Float)
 
+    # Raw OI data for filtering
+    call_oi = db.Column(db.Integer, nullable=True)
+    put_oi = db.Column(db.Integer, nullable=True)
+
     # Snapshot of context for this calculation
     spot_price_at_calculation = db.Column(db.Float)
     calculation_timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
