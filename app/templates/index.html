@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>GEX Viewer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <h1>Stock GEX Viewer</h1>
@@ -19,7 +20,11 @@
     </div>
 
     <div id="gexResult" style="margin-top: 10px;">
-        <!-- GEX data will be displayed here -->
+        <!-- GEX data table will be displayed here -->
+    </div>
+
+    <div id="chartContainer" style="width: 80%; max-width: 900px; margin: 20px auto; display: none;">
+        <canvas id="gexChart"></canvas>
     </div>
 
     <script>
@@ -28,9 +33,12 @@
         const expirationSelect = document.getElementById('expirationDate');
         const controlsSection = document.getElementById('controlsSection');
         const gexResultDiv = document.getElementById('gexResult');
+        const chartContainer = document.getElementById('chartContainer');
+        const gexChartCanvas = document.getElementById('gexChart');
 
         let currentTicker = '';
         let currentExpirations = [];
+        let gexChart = null; // To hold the chart instance
 
         async function fetchAndDisplayGEX(ticker, expiration = null) {
             gexResultDiv.innerHTML = '<p>Loading GEX data...</p>';
@@ -139,10 +147,91 @@
                 }
                 gexResultDiv.innerHTML = resultHtml;
 
+                // Charting logic
+                if (gexChart) {
+                    gexChart.destroy(); // Destroy previous chart instance
+                    gexChart = null;
+                }
+
+                if (data.gex_by_strike && data.gex_by_strike.length > 0) {
+                    chartContainer.style.display = 'block';
+                    const strikes = data.gex_by_strike.map(item => item.strike.toFixed(2));
+                    const callGEXData = data.gex_by_strike.map(item => item.call_gex_usd);
+                    const putGEXData = data.gex_by_strike.map(item => item.put_gex_usd);
+                    // For tooltip, we need Net GEX data available per strike
+                    const netGEXData = data.gex_by_strike.map(item => item.net_gex_usd);
+
+                    gexChart = new Chart(gexChartCanvas, {
+                        type: 'bar',
+                        data: {
+                            labels: strikes,
+                            datasets: [
+                                {
+                                    label: 'Call GEX ($)',
+                                    data: callGEXData,
+                                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                                    borderColor: 'rgba(75, 192, 192, 1)',
+                                    borderWidth: 1
+                                },
+                                {
+                                    label: 'Put GEX ($)',
+                                    data: putGEXData,
+                                    backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                                    borderColor: 'rgba(255, 99, 132, 1)',
+                                    borderWidth: 1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true, // Adjust as needed, true by default
+                            scales: {
+                                x: {
+                                    title: { display: true, text: 'Strike Price' }
+                                },
+                                y: {
+                                    title: { display: true, text: 'Gamma Exposure ($ Amount)' },
+                                    beginAtZero: false // Allow negative if net GEX was plotted directly
+                                }
+                            },
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: `GEX Profile for ${data.ticker} - Exp: ${data.selected_expiration_date}`
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            let label = context.dataset.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (context.parsed.y !== null) {
+                                                label += '$' + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                            }
+                                            return label;
+                                        },
+                                        footer: function(tooltipItems) {
+                                            // Display Net GEX in the footer of the tooltip
+                                            // We need to access the original data point index
+                                            const dataIndex = tooltipItems[0].dataIndex;
+                                            const netGexValue = netGEXData[dataIndex];
+                                            return 'Net GEX: $' + netGexValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    chartContainer.style.display = 'none'; // Hide chart if no data
+                }
+
             } catch (error) {
                 console.error("Frontend error:", error);
                 gexResultDiv.innerHTML = `<p style="color: red;">Frontend error: ${error.message}. Check console for details.</p>`;
                 controlsSection.style.display = 'none';
+                chartContainer.style.display = 'none';
             }
         }
 
