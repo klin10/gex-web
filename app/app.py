@@ -5,6 +5,7 @@ import yfinance as yf
 import pandas as pd
 from .models import db, Ticker, Expiration, GEXStrikeData
 from .gex_calculator import GEXCalculator
+from .tasks import ingest_ticker_data # Import the ingestion task
 
 app = Flask(__name__)
 
@@ -32,14 +33,23 @@ def get_gex_data_from_db():
 
     ticker_symbol = ticker_symbol_req.upper()
 
-    # 1. Find the Ticker in DB
+    # 1. Find the Ticker in DB or trigger on-demand ingestion
     ticker_orm = db.session.query(Ticker).filter_by(symbol=ticker_symbol).first()
     if not ticker_orm:
-        return jsonify({
-            "error": f"Data for ticker {ticker_symbol} not found in database. Please run ingestor.",
-            "ticker": ticker_symbol,
-            "all_expiration_dates": []
-        }), 404
+        print(f"Ticker {ticker_symbol} not found in DB. Triggering on-demand ingestion.")
+        try:
+            # The ingest_ticker_data function uses its own session management from the tasks module
+            # But for the web app, it's better to use the session from the app context
+            ingest_ticker_data(ticker_symbol, db.session)
+            # After ingestion, query again
+            ticker_orm = db.session.query(Ticker).filter_by(symbol=ticker_symbol).first()
+            if not ticker_orm:
+                # If it's still not found, ingestion must have failed for a significant reason
+                return jsonify({"error": f"Failed to fetch data for new ticker {ticker_symbol}."}), 404
+        except Exception as e:
+            print(f"On-demand ingestion for {ticker_symbol} failed: {e}")
+            return jsonify({"error": f"Failed to perform first-time data fetch for {ticker_symbol}: {e}"}), 500
+
 
     company_name = ticker_orm.company_name or ticker_symbol
 
