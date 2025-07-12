@@ -112,11 +112,24 @@ def get_gex_data_from_db():
         aggregated_strikes[strike_val]['call_oi'] += strike_db.call_oi or 0
         aggregated_strikes[strike_val]['put_oi'] += strike_db.put_oi or 0
 
+    # Determine spot price for filtering before formatting the response
+    spot_price_at_calc = expirations_to_query_orm[-1].strikes[0].spot_price_at_calculation if expirations_to_query_orm and expirations_to_query_orm[-1].strikes else None
+
     # --- Filtering Logic ---
+    # 1. Filter by Strike Price Range (Moneyness)
+    strike_range_percent_req = request.args.get('strike_range', type=float)
+    strikes_list = list(aggregated_strikes.values())
+
+    if strike_range_percent_req and spot_price_at_calc:
+        # Convert percentage from e.g. 20 to 0.20
+        strike_range = strike_range_percent_req / 100.0
+        min_strike = spot_price_at_calc * (1 - strike_range)
+        max_strike = spot_price_at_calc * (1 + strike_range)
+        strikes_list = [s for s in strikes_list if min_strike <= s['strike'] <= max_strike]
+
+    # 2. Filter by Open Interest
     MIN_STRIKES_TO_FILTER = 50
     OI_PERCENTILE_THRESHOLD = 0.95
-
-    strikes_list = list(aggregated_strikes.values())
 
     if len(strikes_list) > MIN_STRIKES_TO_FILTER:
         for strike in strikes_list:
@@ -143,9 +156,6 @@ def get_gex_data_from_db():
     total_net_gex = sum(s['net_gex_usd'] for s in gex_strikes_to_display)
     total_call_gex = sum(s['call_gex_usd'] for s in gex_strikes_to_display)
     total_put_gex = sum(s['put_gex_usd'] for s in gex_strikes_to_display)
-
-    # Take the spot price from the latest selected expiration date for display
-    spot_price_at_calc = expirations_to_query_orm[-1].strikes[0].spot_price_at_calculation if expirations_to_query_orm and expirations_to_query_orm[-1].strikes else None
 
     # The zero_gamma_level is now calculated by a separate endpoint.
     # We remove it from this response.
