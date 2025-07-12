@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GEX Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Stock GEX Viewer</h1>
+    <form id="tickerForm">
+        <label for="ticker">Enter Stock Ticker:</label>
+        <input type="text" id="ticker" name="ticker" required>
+        <button type="submit">Get GEX Data</button>
+    </form>
+    <div id="gexResult">
+        <!-- GEX data will be displayed here -->
+    </div>
+    <script>
+        document.getElementById('tickerForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const ticker = document.getElementById('ticker').value;
+            const response = await fetch(`/gex?ticker=${ticker}`);
+            const data = await response.json();
+            let resultHtml = '';
+            if (data.error) {
+                resultHtml = `<p style="color: red;">Error: ${data.error}</p>`;
+            } else {
+                resultHtml = `<h2>Data for ${data.ticker}</h2>
+                              <p><strong>Expiration Date Considered:</strong> ${data.selected_expiration_date}</p>
+                              <p><strong>Total Call Open Interest (shares):</strong> ${data.total_call_open_interest_shares.toLocaleString()}</p>
+                              <p><strong>Total Put Open Interest (shares):</strong> ${data.total_put_open_interest_shares.toLocaleString()}</p>
+                              <p><strong>Net Open Interest Exposure (shares):</strong> ${data.net_open_interest_exposure_shares.toLocaleString()}</p>
+                              <p><small><em>Note: ${data.calculation_note}</em></small></p>`;
+            }
+            document.getElementById('gexResult').innerHTML = resultHtml;
+        });
+    </script>
+</body>
+</html>
