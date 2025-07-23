@@ -4,6 +4,7 @@ import datetime
 from sqlalchemy.orm import Session
 from .models import Ticker, Expiration, GEXStrikeData
 from .gex_calculator import GEXCalculator
+from .session_manager import global_session
 
 def get_spot_price(yf_ticker_obj):
     try:
@@ -26,7 +27,7 @@ def ingest_ticker_data(ticker_symbol: str, db_session: Session):
     """
     print(f"Starting ingestion for ticker: {ticker_symbol.upper()}")
 
-    yf_ticker = yf.Ticker(ticker_symbol)
+    yf_ticker = yf.Ticker(ticker_symbol, session=global_session)
 
     # 1. Get Ticker Info
     try:

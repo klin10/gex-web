@@ -6,6 +6,7 @@ import pandas as pd
 from .models import db, Ticker, Expiration, GEXStrikeData
 from .gex_calculator import GEXCalculator
 from .tasks import ingest_ticker_data # Import the ingestion task
+from .session_manager import global_session
 
 app = Flask(__name__)
 
@@ -13,6 +14,7 @@ app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'gex_data.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 
 db.init_app(app)
 # --- End Database Configuration ---
@@ -200,7 +202,7 @@ def calculate_zero_gamma_endpoint():
 
     try:
         strikes_to_include = [float(s) for s in strikes_to_include_str] if strikes_to_include_str else None
-        yf_ticker = yf.Ticker(ticker_symbol)
+        yf_ticker = yf.Ticker(ticker_symbol, session=global_session)
 
         # Fetch fresh data from yfinance for the calculation
         all_calls = []

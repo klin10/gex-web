@@ -145,7 +145,6 @@
 
 
                 let resultHtml = `<h3>${data.ticker} - GEX Data</h3>`;
-                const selectedDates = Array.isArray(data.selected_expiration_date) ? data.selected_expiration_date : [data.selected_expiration_date];
                 resultHtml += `<p><strong>Selected Expiration(s):</strong> ${selectedDates.join(', ')}</p>`;
 
                 if (data.spot_price_used !== null && data.spot_price_used !== undefined) {
